@@ -15,14 +15,14 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "Libro", "LacreError", "LibroCorrupto",
     "raiz_merkle", "verificar_inclusion", "verificar_consistencia", "comprobar",
-    "VIGENTE", "CADUCA", "HUERFANA",
+    "VIGENTE", "CADUCA", "HUERFANA", "RELEVADA",
 ]
 
-VIGENTE, CADUCA, HUERFANA = "vigente", "caduca", "huerfana"
+VIGENTE, CADUCA, HUERFANA, RELEVADA = "vigente", "caduca", "huerfana", "relevada"
 _GRAVEDAD = {VIGENTE: 0, CADUCA: 1, HUERFANA: 2}
 _CERO = "0" * 64
 
@@ -174,6 +174,10 @@ def comprobar(prueba: dict) -> bool:
 
 # ── libro ─────────────────────────────────────────────────────────────────────
 
+def _relevados(asientos: list[dict]) -> set[str]:
+    return {a["c"]["retira"] for a in asientos if a["tipo"] == "relevo"}
+
+
 def _id(a: dict) -> str:
     return _hoja(_canon({k: a[k] for k in ("n", "t", "tipo", "c", "prev")})).hex()
 
@@ -301,6 +305,27 @@ class Libro:
 
         return self._anexar("afirmacion", cuerpo)
 
+    def relevar(self, ref: str, por: str | None = None, motivo: str = "") -> dict:
+        """Retira un asiento superado sin borrarlo: deja de contar en la vigencia.
+
+        por: id del asiento que lo sustituye (informativo; no traslada dependencias).
+        """
+        def cuerpo(previos: list[dict]) -> dict:
+            viejo = self.buscar(ref, previos)
+            if viejo["tipo"] == "relevo":
+                raise LacreError("un relevo no se puede relevar")
+            if viejo["id"] in _relevados(previos):
+                raise LacreError(f"ya relevado: {viejo['id'][:12]}")
+            c: dict[str, Any] = {"retira": viejo["id"], "motivo": motivo}
+            if por is not None:
+                nuevo = self.buscar(por, previos)
+                if nuevo["id"] == viejo["id"]:
+                    raise LacreError("un asiento no se releva a sí mismo")
+                c["por"] = nuevo["id"]
+            return c
+
+        return self._anexar("relevo", cuerpo)
+
     def anotar(self, texto: str) -> dict:
         """Registra una nota libre."""
         return self._anexar("nota", lambda _: {"texto": texto})
@@ -316,12 +341,19 @@ class Libro:
     # vigencia -----------------------------------------------------------------
 
     def vigencia(self) -> dict[str, str]:
-        """Estado de cada asiento: una afirmación hereda el peor estado de sus dependencias."""
+        """Estado de cada asiento: una afirmación hereda el peor estado de sus dependencias.
+
+        Un asiento relevado queda `relevada`; lo que aún dependa de él, `caduca`.
+        """
         est: dict[str, str] = {}
         cache: dict[str, str | None] = {}
-        for a in self.asientos():
+        todos = self.asientos()
+        fuera = _relevados(todos)
+        for a in todos:
             c = a["c"]
-            if a["tipo"] == "artefacto":
+            if a["id"] in fuera:
+                e = RELEVADA
+            elif a["tipo"] == "artefacto":
                 ruta = c["ruta"]
                 if ruta not in cache:
                     p = self.base / ruta
@@ -329,7 +361,7 @@ class Libro:
                 actual = cache[ruta]
                 e = HUERFANA if actual is None else VIGENTE if actual == c["sha256"] else CADUCA
             else:
-                e = max((est[d] for d in c.get("deps", ())),
+                e = max((CADUCA if est[d] == RELEVADA else est[d] for d in c.get("deps", ())),
                         key=_GRAVEDAD.__getitem__, default=VIGENTE)
             est[a["id"]] = e
         return est

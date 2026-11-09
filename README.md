@@ -46,6 +46,7 @@ Requiere Python ≥ 3.10. No instala nada más.
 lacre sellar <archivo>...                  # registra ruta, sha256 y tamaño
 lacre afirmar "<texto>" [--valor V] [--dep ID]... [-- comando]
 lacre anotar "<texto>"
+lacre relevar <id> [--por ID] [--motivo M]   # retira un asiento superado, sin borrarlo
 lacre log                                  # lista los asientos
 lacre verificar                            # integridad de la cadena
 lacre vigencia                             # ¿sigue respaldado lo afirmado?
@@ -77,7 +78,7 @@ libro = Libro("lacre.jsonl")
 datos = libro.sellar("datos.csv")
 a = libro.afirmar("80 tests verdes", 80, deps=[datos["id"]], cmd=["pytest", "-q"])
 
-libro.vigencia()[a["id"]]      # "vigente" | "caduca" | "huerfana"
+libro.vigencia()[a["id"]]      # "vigente" | "caduca" | "huerfana" | "relevada"
 libro.reejecutar(a["id"])      # True si código de salida y stdout coinciden
 
 sello = libro.sello()          # {"n": 2, "raiz": "…", "t": …}
@@ -89,9 +90,11 @@ comprobar(prueba)              # True; no necesita el libro
 
 ## Conceptos
 
-**Asiento.** Una línea del libro. Tres tipos: `artefacto` (un archivo y su hash), `afirmacion` (un texto, un valor opcional, sus dependencias y un comando opcional) y `nota`.
+**Asiento.** Una línea del libro. Cuatro tipos: `artefacto` (un archivo y su hash), `afirmacion` (un texto, un valor opcional, sus dependencias y un comando opcional), `relevo` y `nota`.
 
-**Vigencia.** Un artefacto está `vigente` si el archivo en disco conserva el hash sellado, `caduca` si cambió y `huerfana` si ya no existe. Una afirmación hereda el peor estado de sus dependencias, y las dependencias pueden ser otras afirmaciones: la caducidad se propaga por toda la cadena de derivación. Restaurar el archivo original revalida; para una versión nueva, se sella de nuevo y se vuelve a afirmar.
+**Vigencia.** Un artefacto está `vigente` si el archivo en disco conserva el hash sellado, `caduca` si cambió y `huerfana` si ya no existe. Una afirmación hereda el peor estado de sus dependencias, y las dependencias pueden ser otras afirmaciones: la caducidad se propaga por toda la cadena de derivación. Restaurar el archivo original revalida; para una versión nueva, se sella de nuevo, se vuelve a afirmar y se releva lo anterior.
+
+**Relevo.** El libro nunca se edita, así que lo superado se retira con un asiento nuevo: `relevar` marca un asiento anterior como `relevada`, opcionalmente señalando cuál lo sustituye. Deja de contar en la vigencia, pero sigue en el libro y sigue siendo demostrable. El relevo no traslada dependencias: una afirmación que aún dependa de un asiento relevado queda `caduca` hasta que se vuelva a afirmar sobre el nuevo.
 
 **Comando como evidencia.** Lo que va tras `--` se ejecuta en el momento, sin shell, y se guardan el código de salida y el sha256 de stdout. `reejecutar` lo repite y compara.
 

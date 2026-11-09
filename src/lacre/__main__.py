@@ -6,7 +6,7 @@ import json
 import os
 import sys
 
-from . import VIGENTE, LacreError, Libro, __version__, comprobar
+from . import RELEVADA, VIGENTE, LacreError, Libro, __version__, comprobar
 
 
 def _valor(s: str | None):
@@ -26,6 +26,9 @@ def _resumen(a: dict) -> str:
     c = a["c"]
     if a["tipo"] == "artefacto":
         d = f"{c['ruta']}  sha256:{c['sha256'][:12]}"
+    elif a["tipo"] == "relevo":
+        d = f"retira {c['retira'][:12]}" + (f" → {c['por'][:12]}" if "por" in c else "") \
+            + (f"  ({c['motivo']})" if c.get("motivo") else "")
     else:
         d = c["texto"] + (f"  = {json.dumps(c['valor'], ensure_ascii=False)}" if "valor" in c else "")
         if "cmd" in c:
@@ -46,6 +49,10 @@ def main(argv: list[str] | None = None) -> int:
     x.add_argument("texto")
     x.add_argument("--valor")
     x.add_argument("--dep", action="append", default=[])
+    x = s.add_parser("relevar", help="retira un asiento superado (no lo borra)")
+    x.add_argument("ref")
+    x.add_argument("--por", help="asiento que lo sustituye")
+    x.add_argument("--motivo", default="")
     x = s.add_parser("anotar", help="registra una nota")
     x.add_argument("texto")
     s.add_parser("log", help="lista los asientos")
@@ -77,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(_resumen(libro.sellar(f)))
         elif a.orden == "afirmar":
             print(_resumen(libro.afirmar(a.texto, _valor(a.valor), a.dep, cmd or None)))
+        elif a.orden == "relevar":
+            print(_resumen(libro.relevar(a.ref, a.por, a.motivo)))
         elif a.orden == "anotar":
             print(_resumen(libro.anotar(a.texto)))
         elif a.orden == "log":
@@ -88,8 +97,8 @@ def main(argv: list[str] | None = None) -> int:
             est = libro.vigencia()
             malos = 0
             for e in libro:
-                if e["tipo"] != "nota":
-                    malos += est[e["id"]] != VIGENTE
+                if e["tipo"] not in ("nota", "relevo"):
+                    malos += est[e["id"]] not in (VIGENTE, RELEVADA)
                     print(f"{est[e['id']]:<9}{_resumen(e)}")
             return 1 if malos else 0
         elif a.orden == "reejecutar":

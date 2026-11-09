@@ -330,3 +330,70 @@ def test_sello_con_tamano_fuera_de_rango(libro):
     assert not libro.verificar_sello({"n": -1, "raiz": raiz_merkle(ids[:-1]).hex(), "t": 0})
     assert not libro.verificar_sello({"n": 9, "raiz": raiz_merkle(ids).hex(), "t": 0})
     assert not libro.verificar_sello({"raiz": "00"})
+
+
+# ── relevo ────────────────────────────────────────────────────────────────────
+
+def test_relevo_retira_sin_borrar(libro, tmp_path):
+    f = tmp_path / "f.txt"
+    f.write_text("v1")
+    a1 = libro.sellar(f)
+    c1 = libro.afirmar("recuento", 1, deps=[a1["id"]])
+    f.write_text("v2")
+    a2 = libro.sellar(f)
+    c2 = libro.afirmar("recuento", 2, deps=[a2["id"]])
+    assert [libro.vigencia()[x["id"]] for x in (a1, c1, a2, c2)] == [CADUCA, CADUCA, VIGENTE, VIGENTE]
+
+    n = libro.verificar()
+    r1 = libro.relevar(a1["id"][:10], por=a2["id"], motivo="re-sellado")
+    r2 = libro.relevar(c1["id"], por=c2["id"])
+    assert r1["c"] == {"retira": a1["id"], "por": a2["id"], "motivo": "re-sellado"}
+    assert libro.verificar() == n + 2                    # nada se borra: el libro solo crece
+    est = libro.vigencia()
+    assert [est[x["id"]] for x in (a1, c1, a2, c2)] == [lacre.RELEVADA, lacre.RELEVADA, VIGENTE, VIGENTE]
+    assert est[r1["id"]] == est[r2["id"]] == VIGENTE
+    assert comprobar(libro.probar(a1["id"]))             # lo relevado sigue siendo demostrable
+
+
+def test_relevar_no_traslada_dependencias(libro, tmp_path):
+    f = tmp_path / "f.txt"
+    f.write_text("v1")
+    a1 = libro.sellar(f)
+    c = libro.afirmar("depende de v1", deps=[a1["id"]])
+    f.write_text("v2")
+    a2 = libro.sellar(f)
+    libro.relevar(a1["id"], por=a2["id"])
+    assert libro.vigencia()[c["id"]] == CADUCA           # su respaldo se retiró; no hereda el de v2
+    f.write_text("v1")
+    assert libro.vigencia()[c["id"]] == CADUCA           # ni aunque el archivo vuelva: el respaldo ya no cuenta
+
+
+def test_relevo_reglas(libro):
+    a = libro.anotar("x")
+    b = libro.afirmar("y")
+    r = libro.relevar(b["id"])
+    assert "por" not in r["c"]
+    for ref, por in ((b["id"], None), (r["id"], None), (a["id"], a["id"]), ("f" * 12, None), (a["id"], "f" * 12)):
+        with pytest.raises(LacreError):
+            libro.relevar(ref, por=por)
+    assert libro.verificar() == 3
+
+
+def test_cli_relevar(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LACRE_CLAVE", raising=False)
+    monkeypatch.delenv("LACRE_LIBRO", raising=False)
+    (tmp_path / "d.txt").write_text("1")
+    main(["sellar", "d.txt"])
+    viejo = capsys.readouterr().out.split()[1]
+    (tmp_path / "d.txt").write_text("2")
+    main(["sellar", "d.txt"])
+    nuevo = capsys.readouterr().out.split()[1]
+    assert main(["vigencia"]) == 1
+    assert main(["relevar", viejo, "--por", nuevo, "--motivo", "re-sellado"]) == 0
+    assert "retira" in capsys.readouterr().out
+    assert main(["vigencia"]) == 0
+    out = capsys.readouterr().out
+    assert "relevada" in out and out.count("\n") == 2    # el relevo en sí no se lista
+    assert main(["relevar", viejo]) == 2
+    assert main(["log"]) == 0 and "(re-sellado)" in capsys.readouterr().out
